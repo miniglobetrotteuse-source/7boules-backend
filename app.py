@@ -1,4 +1,195 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python3v#!/usr/bin/env python3
+from flask import Flask, request, jsonify
+from flask_cors import CORS
+from kerykeion import AstrologicalSubject
+from timezonefinder import TimezoneFinder
+import swisseph as swe
+import os
+
+app = Flask(__name__)
+CORS(app)
+tf = TimezoneFinder()
+
+VILLES = {
+    "paris": (48.8566, 2.3522, "Europe/Paris"),
+    "marseille": (43.2965, 5.3698, "Europe/Paris"),
+    "lyon": (45.7640, 4.8357, "Europe/Paris"),
+    "toulouse": (43.6047, 1.4442, "Europe/Paris"),
+    "nice": (43.7102, 7.2620, "Europe/Paris"),
+    "nantes": (47.2184, -1.5536, "Europe/Paris"),
+    "bordeaux": (44.8378, -0.5792, "Europe/Paris"),
+    "strasbourg": (48.5734, 7.7521, "Europe/Paris"),
+    "lille": (50.6292, 3.0573, "Europe/Paris"),
+    "rennes": (48.1173, -1.6778, "Europe/Paris"),
+    "bruxelles": (50.8503, 4.3517, "Europe/Brussels"),
+    "geneve": (46.2044, 6.1432, "Europe/Zurich"),
+    "zurich": (47.3769, 8.5417, "Europe/Zurich"),
+    "lausanne": (46.5197, 6.6323, "Europe/Zurich"),
+    "montreal": (45.5017, -73.5673, "America/Montreal"),
+    "quebec": (46.8139, -71.2082, "America/Toronto"),
+    "brazzaville": (-4.2634, 15.2662, "Africa/Brazzaville"),
+    "kinshasa": (-4.3317, 15.3278, "Africa/Kinshasa"),
+    "dakar": (14.6928, -17.4467, "Africa/Dakar"),
+    "abidjan": (5.3600, -4.0083, "Africa/Abidjan"),
+    "douala": (4.0511, 9.7679, "Africa/Douala"),
+    "yaounde": (3.8480, 11.5021, "Africa/Douala"),
+    "libreville": (0.3901, 9.4544, "Africa/Libreville"),
+    "lome": (6.1375, 1.2123, "Africa/Lome"),
+    "cotonou": (6.3654, 2.4183, "Africa/Porto-Novo"),
+    "bamako": (12.6392, -8.0029, "Africa/Bamako"),
+    "ouagadougou": (12.3714, -1.5197, "Africa/Ouagadougou"),
+    "niamey": (13.5137, 2.1098, "Africa/Niamey"),
+    "conakry": (9.5370, -13.6773, "Africa/Conakry"),
+    "antananarivo": (-18.9137, 47.5361, "Indian/Antananarivo"),
+    "casablanca": (33.5731, -7.5898, "Africa/Casablanca"),
+    "rabat": (34.0209, -6.8416, "Africa/Casablanca"),
+    "marrakech": (31.6295, -7.9811, "Africa/Casablanca"),
+    "alger": (36.7372, 3.0865, "Africa/Algiers"),
+    "tunis": (36.8188, 10.1658, "Africa/Tunis"),
+    "fort-de-france": (14.6037, -61.0730, "America/Martinique"),
+    "pointe-a-pitre": (16.2415, -61.5330, "America/Guadeloupe"),
+    "cayenne": (4.9224, -52.3135, "America/Cayenne"),
+    "port-au-prince": (18.5944, -72.3074, "America/Port-au-Prince"),
+    "belgrade": (44.7866, 20.4489, "Europe/Belgrade"),
+    "london": (51.5074, -0.1278, "Europe/London"),
+    "new york": (40.7128, -74.0060, "America/New_York"),
+}
+
+SIGNES_FR = {
+    "Ari": "Bélier", "Tau": "Taureau", "Gem": "Gémeaux",
+    "Can": "Cancer", "Leo": "Lion", "Vir": "Vierge",
+    "Lib": "Balance", "Sco": "Scorpion", "Sag": "Sagittaire",
+    "Cap": "Capricorne", "Aqu": "Verseau", "Pis": "Poissons"
+}
+
+SIGNES_LIST = ['Bélier','Taureau','Gémeaux','Cancer','Lion','Vierge',
+               'Balance','Scorpion','Sagittaire','Capricorne','Verseau','Poissons']
+
+MAISONS_NUM = {
+    "First_House": 1, "Second_House": 2, "Third_House": 3,
+    "Fourth_House": 4, "Fifth_House": 5, "Sixth_House": 6,
+    "Seventh_House": 7, "Eighth_House": 8, "Ninth_House": 9,
+    "Tenth_House": 10, "Eleventh_House": 11, "Twelfth_House": 12
+}
+
+def trouver_coords(lieu):
+    lieu_lower = lieu.lower().strip()
+    if "," in lieu_lower:
+        lieu_lower = lieu_lower.split(",")[0].strip()
+    for ville, coords in VILLES.items():
+        if ville == lieu_lower or ville in lieu_lower or lieu_lower in ville:
+            return coords
+    return None, None, None
+
+def fmt_planete(obj):
+    signe_fr = SIGNES_FR.get(obj['sign'][:3], obj['sign'])
+    maison_num = MAISONS_NUM.get(obj['house'], 0)
+    return {"signe": signe_fr, "maison": maison_num, "degre": round(obj['position'], 1)}
+
+def maison_pour_longitude(lon, cusps):
+    """Trouve la maison pour une longitude donnée"""
+    for i in range(11, -1, -1):
+        if lon >= cusps[i]:
+            return i + 1
+    return 12
+
+def calc_asteroide(jd, numero, cusps):
+    """Calcule la position d'un astéroïde via Swiss Ephemeris"""
+    try:
+        result = swe.calc_ut(jd, numero)
+        lon = result[0][0]
+        signe_idx = int(lon / 30)
+        degre = lon % 30
+        maison = maison_pour_longitude(lon, cusps)
+        return {
+            "signe": SIGNES_LIST[signe_idx],
+            "maison": maison,
+            "degre": round(degre, 1)
+        }
+    except:
+        return None
+
+@app.route('/theme', methods=['POST'])
+def calculer_theme():
+    try:
+        data = request.json
+        annee = int(data['annee'])
+        mois = int(data['mois'])
+        jour = int(data['jour'])
+        heure = int(data['heure'])
+        minute = int(data['minute'])
+        lieu = data.get('lieu', 'Paris')
+
+        lat, lng, tz = trouver_coords(lieu)
+        if lat is None:
+            lat, lng, tz = 48.8566, 2.3522, "Europe/Paris"
+            lieu_utilise = f"{lieu} (Paris par défaut)"
+        else:
+            lieu_utilise = lieu
+
+        # Calcul via Kerykeion
+        s = AstrologicalSubject(
+            "Natif", annee, mois, jour, heure, minute,
+            lng=lng, lat=lat, tz_str=tz,
+            zodiac_type="Tropical",
+            houses_system_identifier="P"
+        )
+
+        theme = {
+            "lieu": lieu_utilise,
+            # Planètes classiques
+            "soleil": fmt_planete(s.sun),
+            "lune": fmt_planete(s.moon),
+            "mercure": fmt_planete(s.mercury),
+            "venus": fmt_planete(s.venus),
+            "mars": fmt_planete(s.mars),
+            "jupiter": fmt_planete(s.jupiter),
+            "saturne": fmt_planete(s.saturn),
+            "uranus": fmt_planete(s.uranus),
+            "neptune": fmt_planete(s.neptune),
+            "pluton": fmt_planete(s.pluto),
+            "ascendant": SIGNES_FR.get(s.first_house['sign'][:3], s.first_house['sign']),
+            "mc": SIGNES_FR.get(s.tenth_house['sign'][:3], s.tenth_house['sign']),
+            # Astéroïdes via Kerykeion
+            "chiron": fmt_planete(s.chiron),
+            "lilith": fmt_planete(s.mean_lilith),
+            "noeud_nord": fmt_planete(s.true_north_lunar_node),
+            "noeud_sud": fmt_planete(s.true_south_lunar_node),
+        }
+
+        # Astéroïdes supplémentaires via Swiss Ephemeris direct
+        jd = s.julian_day
+        cusps = [s.first_house['position']]
+        for h in [s.second_house, s.third_house, s.fourth_house, s.fifth_house,
+                  s.sixth_house, s.seventh_house, s.eighth_house, s.ninth_house,
+                  s.tenth_house, s.eleventh_house, s.twelfth_house]:
+            cusps.append(h['position'])
+
+        asteroides_swe = {
+            "ceres": 1,
+            "pallas": 2,
+            "juno": 3,
+            "vesta": 4,
+        }
+
+        for nom, num in asteroides_swe.items():
+            result = calc_asteroide(jd, num, cusps)
+            if result:
+                theme[nom] = result
+
+        return jsonify({"ok": True, "theme": theme})
+
+    except Exception as e:
+        return jsonify({"ok": False, "erreur": str(e)}), 500
+
+@app.route('/ping', methods=['GET'])
+def ping():
+    return jsonify({"ok": True, "message": "Les 7 Boules de Cristal — API active"})
+
+if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 5555))
+    app.run(host='0.0.0.0', port=port)
+
 """
 Backend Flask — Les 7 Boules de Cristal
 Calcul du thème natal via Swiss Ephemeris (Kerykeion)
